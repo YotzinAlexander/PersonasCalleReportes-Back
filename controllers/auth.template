@@ -1,0 +1,732 @@
+const  {response} = require('express');
+const express =     require('express');
+const {validationResult, body} = require('express-validator');
+const bcrypt = require('bcryptjs');
+const oracle = require('oracledb');
+
+
+const User = require('../models/user');
+const { generarJWT } = require('../helpers/jwt');
+const reporte = require('../models/reporte');
+const razonamiento_corporacion = require('../models/razonamiento_corporacion');
+const reporte_asignacion = require('../models/reporte_asignacion');
+
+const app = express();
+const http = require ("http");
+const {Server} = require("socket.io");
+const CoporacionesOng = require('../models/corporaciones_ongs');
+
+
+const server = http.createServer(app);
+
+const io  = new Server(server, {
+    cors:{
+        origin: "*",
+        methods: ["GET", "POST"],
+    }
+});
+
+
+io.on('connection', (socket) => { /* … */
+    console.log(`Cliente Conectado 2 ${socket.id} `)
+
+});
+
+
+
+
+
+const crearUsuario = async (req, res = response) => {
+
+    const { name, user, password} = req.body;
+
+    try {
+        let searchUser = await User.findOne({user});
+
+        if ( searchUser){
+            return res.status(400).json({
+                ok:false,
+                msg: 'this user existed'
+            });
+        }
+            const usuario = new User(req.body);
+
+            const salt = bcrypt.genSaltSync();
+            usuario.password = bcrypt.hashSync(password, salt);
+        
+            await usuario.save();
+            
+            res.status(201).json({
+                ok: true,
+                msg: 'registro',
+                user,
+                password,
+                name
+            })
+                console.log('Usuario a crear:: ',req.body)
+
+        
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({
+            ok: false,
+            msg: 'Please called with administration'
+        })
+        
+    }
+    
+}
+
+const loginUsuario = async (req,res = response) => {
+
+    const { user, password} = req.body
+
+    console.log(req.body)
+
+    try {
+        let searchUser = await User.findOne({user});
+
+        if (!searchUser){
+            return res.status(400).json({
+                ok:false,
+                msg: 'this user existed'
+            });
+        }
+
+        // confirmas contraseña
+        const validPassword = bcrypt.compareSync(password, searchUser.password);
+        console.log(validPassword)
+
+        if(!validPassword){
+            return res.status(400).json({
+                ok: false,
+                msg: 'User or Password incorrect'
+            })
+        }
+
+        // Generar Token
+        const token = await generarJWT(searchUser.id, searchUser.name);
+        // Respuesta de validez 
+
+        res.json({
+            ok: true,
+            uid: searchUser.id,
+            name: searchUser.name,
+            corporacion: searchUser.corporacion,
+            uType: searchUser.uType,
+            token
+        })
+
+        reportPersonas();
+
+        console.log('Inicio de sesion valida', {uid: searchUser.id, name: searchUser.user})
+
+
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({
+            ok: false,
+            msg: 'User or password incorrect'
+        })
+    }
+}
+
+const searchCorporaciones = async(req, res = response) =>{
+   const  arreglo = [];
+
+    try {
+        let searchCorpo = await CoporacionesOng.find();
+        // for(let i = 0; i<searchCorpo.length; i++){
+        //     arreglo.value = searchCorpo[i].institucion;
+        //     arreglo.label = searchCorpo[i].institucion;
+
+        //     arreglo.push(arreglo.value, arreglo.label)
+
+        // }
+
+
+
+        res.json({
+            ok: true,
+            data: searchCorpo
+        })
+
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({
+            ok: false,
+            msg: 'Please called with administration'
+        })
+    }
+}
+
+const crearCorpo = async ( req, res = response) => {
+    const { institucion }= req.body;
+    // console.log(req.body);
+    // console.log('LLEGA')
+
+    try {
+        let searchCorpo = await CoporacionesOng.findOne({institucion});
+
+        if ( searchCorpo){
+            return res.status(400).json({
+                ok:false,
+                msg: 'this corporation existed'
+            });
+        }
+        const createCorporacion = await CoporacionesOng.create(req.body);
+
+
+        res.json({
+            ok: true,
+            msg: createCorporacion
+        })
+        
+
+    } catch (error) {
+        console.log(error)
+        res.status(500).json({
+            ok: false,
+            msg: 'Please called with administration'
+        })
+        
+    }
+}
+
+const searchReportePersonas = async (req, res = response) => {
+
+    try {
+
+        connection = await oracle.getConnection({
+            user: "",
+            password: '',
+            connectString: ""
+        })
+
+        const resultEventos = await connection.execute(
+            `SELECT max(FOLIO_LLAMADA)folio,max(FECHA_LLAMADA)fecha,max(HORA_LLAMADA)hora,
+            max(MOTIVO_TELEFONISTA)motivo,max(COLONIA)colonia,max(CALLE)calle,
+            max(ENTRE_CALLE)entre_calle, max(coordenada_y)coordenada_y,max(coordenada_x)coordenada_x,
+            max(numero_telefono)telefono,max(descripcion_de_la_llamada)descripcion, max(municipio)municipio
+            from
+            llamadas_reales 
+            WHERE FECHA_HORA_INICIO_LLAMADA BETWEEN 
+            To_Date('01/03/2023 00:00:00', 'dd/mm/yyyy hh24:mi:ss') AND 
+            To_Date('15/03/2023 23:59:59', 'dd/mm/yyyy hh24:mi:ss')
+            
+            and MOTIVO_TELEFONISTA like '%PERSONA EN SITUACION DE CALLE%' 
+            
+            GROUP BY  
+            FECHA_HORA_INICIO_LLAMADA 
+            ORDER BY 
+            FECHA_HORA_INICIO_LLAMADA`
+        );
+
+        // ------------------EVENTOS---------------
+
+        // console.log('RESULTADOS', resultEventos.rows);
+
+        res.json({
+            ok: true,
+            number: resultEventos.rows.length,
+            data:  resultEventos.rows
+
+        }) 
+        
+    } catch (error) {
+        connection.close();
+        console.log(error);
+        res.status(500).json({
+            ok:false,
+            msg: 'Error data'
+        })
+    }
+}
+
+
+const reportPersonas = async(req, res = response) => {
+
+
+    let connection;
+
+    try {
+
+        connection = await oracle.getConnection({
+            user: "",
+            password: '',
+            connectString: ""
+        })
+
+        const resultEventos = await connection.execute(
+            `SELECT max(FOLIO_LLAMADA)folio,max(FECHA_LLAMADA)fecha,max(HORA_LLAMADA)hora,
+            max(MOTIVO_TELEFONISTA)motivo,max(COLONIA)colonia,max(CALLE)calle,
+            max(ENTRE_CALLE)entre_calle, max(coordenada_y)coordenada_y,max(coordenada_x)coordenada_x,
+            max(numero_telefono)telefono,max(descripcion_de_la_llamada)descripcion, max(municipio)municipio
+            from
+            llamadas_reales 
+            WHERE FECHA_HORA_INICIO_LLAMADA BETWEEN 
+            To_Date('01/03/2023 00:00:00', 'dd/mm/yyyy hh24:mi:ss') AND 
+            To_Date('15/03/2023 23:59:59', 'dd/mm/yyyy hh24:mi:ss')
+            
+            and MOTIVO_TELEFONISTA like '%PERSONA EN SITUACION DE CALLE%' 
+            
+            GROUP BY  
+            FECHA_HORA_INICIO_LLAMADA 
+            ORDER BY 
+            FECHA_HORA_INICIO_LLAMADA`
+        );
+
+        // ------------------EVENTOS---------------
+
+        // console.log('RESULTADOS', resultEventos.rows);
+
+
+
+        connection.close();
+
+        console.log(resultEventos.rows.length)
+
+
+        for (var i = 0; i<resultEventos.rows.length; i++ ){
+
+            const body = 
+            {
+                "folio_llamada":       resultEventos.rows[i][0],
+                "fecha_llamada":       resultEventos.rows[i][1],
+                "hora_llamada":        resultEventos.rows[i][2],
+                "motivo_telefonista":  resultEventos.rows[i][3],
+                "colonia":             resultEventos.rows[i][4],
+                "calle":               resultEventos.rows[i][5],
+                "entre_calle":         resultEventos.rows[i][6],
+                "cordenada_y":         resultEventos.rows[i][7],
+                "cordenada_x":         resultEventos.rows[i][8],
+                "numero_telefono":     resultEventos.rows[i][9],
+                "descripcion_llamada": resultEventos.rows[i][10],
+                "municipio":           resultEventos.rows[i][11],
+                "editado":             "0"
+            }        
+        folio_llamada = body.folio_llamada;
+    
+        try {
+            let searchReport = await reporte.findOne({folio_llamada});
+
+            if(searchReport){
+                // return res.status(400).json({
+                //     ok: false,
+                //     msg: 'Existe reporte', folio_llamada
+                // })
+                // console.log('folio existente', folio_llamada)
+            } else {
+                const saveReport = new reporte(body)
+                await saveReport.save();
+                console.log('ejecuto', folio_llamada)
+            }
+
+
+        } catch (error) {
+            console.log('BD ALTERNA', error)
+        }
+
+        }
+
+        // res.json({
+        //     ok: true,
+        //     // data: resultEventos.metaData,
+        //     // arreglo general de respues 
+        //     // [] no de reporte por array
+        //     // [] posicion de arreglo
+        //     // data: resultEventos.rows[0][0]
+        //     data:  resultEventos.rows
+
+        // })  
+        
+    } catch (error) {
+
+        connection.close();
+        console.log(error);
+        res.status(500).json({
+            ok:false,
+            msg: 'Error data'
+        })
+    }
+}
+
+
+const reportPersonasLocal = async(req, res= response ) => {
+    try {
+        let searhReportLocal = await reporte.find();
+        // console.log(searhReportLocal);
+
+        res.json({
+            ok: true,
+            uid: searhReportLocal
+        })
+    } catch (error) {
+        
+        console.log('error 215', error )
+    }
+}
+
+
+const updateEvento = async (req, res= response) => {
+    try {
+        // console.log(req.body)  
+        const {folio_llamada, razonamiento, editado,instituciones} = req.body
+        // instituciones razonamiento
+        // console.log(instituciones);
+
+        let update = await reporte.findOne({folio_llamada});
+
+        if(!update){
+            return res.status(400).json({
+                ok: false,
+                msg: 'folio incorrect'
+            })
+        }
+
+        console.log(instituciones)
+
+        const obj = {
+            folio_llamada: folio_llamada,
+            razonamiento: razonamiento,
+            editado: editado,
+            instituciones: instituciones,
+            estatus : '3'
+        }
+
+        const actualiza = await reporte.findOneAndUpdate({folio_llamada},obj, {newt:true})
+
+        // console.log('Actualiza',obj)
+
+        res.json({
+            ok: true,
+            resp: actualiza
+
+        })
+    } catch (error) {
+        console.log('Error de upadte',error);
+        res.status(500).json({
+            ok: false,
+            msg: 'error in the update'
+        });
+    }
+}
+
+
+const razonamientoCorpo = async (req, res = response ) => {
+
+    const {id_evento, id_corporacion, razonamiento, stateR, uType} = req.body;
+    console.log(req.body)
+    //uType
+
+    try {
+
+        obj = {
+            status: stateR
+        }
+
+        // cambiar status en tabla reporteasignas
+       const enviaRazonamiento = await razonamiento_corporacion.create({id_evento, id_corporacion, razonamiento,uType});
+
+       if(enviaRazonamiento){
+// Cambio de estatus una vez realizado el comentario...
+        const actualizaState = await reporte_asignacion.findOneAndUpdate(({id_evento, id_corporacion}),obj,{new: true});
+
+        // console.log(actualizaState)
+        io.emit('cambio_estado');
+
+        res.json({
+            ok: true,
+            data1: enviaRazonamiento,
+            data2: actualizaState,
+            id_corporacion,
+            id_evento,
+        })
+       }else{
+        res.status(500).json({
+            ok: false,
+            msg: 'error in the razon',
+            error
+        });
+       }
+        
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            msg: 'error in the razon',
+            error
+        });
+    }
+}
+
+
+const razonamientoCorpoOne = async (req, res = response ) => {
+
+    const {id_evento, id_corporacion, razonamiento,uType} = req.body;
+
+    console.log('razonamientoCorpoOne',req.body)
+    try {
+
+        const enviaRazonamiento = await razonamiento_corporacion.create(req.body);
+
+        if(enviaRazonamiento) {
+            console.log('first')
+            obj = {
+                status: 2
+            }
+            const actualizaState = await reporte_asignacion.findOneAndUpdate(({id_evento, id_corporacion}),obj,{new:true});
+
+            res.json({
+                ok: true,
+                data1: enviaRazonamiento,
+                data2: actualizaState  
+            })
+        }
+
+            // if (data['ok'] == true) {
+            //     console.log("guarda el state");
+            //     const {data} = await reporteApi.patch('api/auth/actualizaState',{id_evento,id_corporacion , state})
+            //     console.log('Gaurda', data);
+            // }else{
+            //     console.log('Error al guardar state');
+            // }
+
+
+        
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            msg: 'error in the razon',
+            error
+        });
+    }
+}
+
+//buscar razonamientos por corporacion y por evento
+
+const razonCorpo = async (req, res= response) => {
+    console.log(req.body)
+
+    try {
+        
+        const razonCoporacion = await razonamiento_corporacion.find();
+        res.json({
+            ok: true,
+            data:razonCoporacion
+        })
+    } catch (error) {
+        res.json({
+            ok: false,
+            msg: error
+        })
+    }
+}
+
+const updateState = async(req, res = response) => {
+    const {id_evento, id_corporacion , state} = req.body;;
+
+    console.log(id_evento, state, id_corporacion);
+
+    const folio_llamada = id_evento;
+
+
+    try {
+
+
+        let findFolio = await reporte.find({folio_llamada,"instituciones.value": id_corporacion })
+
+
+        if(!findFolio){
+            return res.status(400).json({
+                ok: false,
+                msg: 'folio incorrect'
+            })
+        } else {
+
+            const obj = {
+                state: state
+            }
+            console.log('State act.')
+
+            const works = {$pull:{instituciones:{"instituciones.state":3 }}};
+
+            let actualizaState = await reporte.findOneAndUpdate({folio_llamada,"instituciones.value": id_corporacion }, {$pull:{instituciones:{"instituciones.state":3 }}}, {new:true})
+
+
+            // let actualizaState = await reporte.findOneAndUpdate({folio_llamada,"instituciones.value": id_corporacion }, {$pull:{instituciones:{"instituciones.state":3 }}}, {new:true})
+
+
+
+            if(!actualizaState){
+                return res.status(400).json({
+                    ok: false,
+                    msg: 'Error de state'
+                });
+            } else {
+
+                res.json({
+                ok:true,
+                resp2: actualizaState
+            })
+
+            }
+
+
+
+        }
+
+        
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            msg: 'error in the updateState',
+            error
+        });
+    }
+}
+
+
+const reporteAsigna = async (req, res = response) => {
+    
+    // console.log(req.body[0].id_evento)
+    console.log(req.body)
+    console.log("Asignacion de evento",req.body[0].id_evento)
+
+    obj = {
+        editado: 1,
+        estatus : '3'
+    }
+    try {
+
+    // actualiza estatus
+    const act = await reporte.findOneAndUpdate({folio_llamada:req.body[0].id_evento}, obj, {new:true}) 
+    
+    // asigna en la base de datos 
+    const repAsigna = await reporte_asignacion.insertMany(req.body);
+      // console.log(repAsigna)
+
+       res.json({
+           ok: true,
+           resp: repAsigna,
+           resp2: act
+       })
+        
+    } catch (error) {
+        res.json({
+            ok: false,
+            resp: 'error report'
+        })
+    }
+}
+
+const allReportAsignados = async (req, res = response) => {
+    try {
+        const searchAllReport = await reporte_asignacion.find();
+        res.json({
+            ok:true,
+            resp: searchAllReport
+        })
+    } catch (error) {
+        res.json({
+            ok: false,
+            resp: 'error allReport'
+        })
+    }
+
+}
+
+
+const ReportAsignados = async (req, res = response) => {
+    // Realiza la busqueda de eventos asignados por corporacion y devuelve estos eventos.
+    // console.log('Request',req.body);
+
+    console.log('REQUEST',req.body)
+
+    const { id_corporacion } = req.body;
+
+    try {
+        const searchReportOne = await reporte_asignacion.find({id_corporacion});
+
+        if(searchReportOne.length){
+            var query = '';
+            const respuesta=[];
+
+            for(var i = 0; i<searchReportOne.length; i++){
+                //  console.log(searchReportOne[i].id_evento)
+
+                 //console.log(query)
+                query =  ''+'"folio_llamada":'+'"'+searchReportOne[i].id_evento+'"'+''
+
+                // console.log(query)
+
+                const searchReportFolio = await reporte.find({"folio_llamada":searchReportOne[i].id_evento})
+                // console.log('RES',searchReportFolio)
+                respuesta.push(searchReportFolio);
+
+            }
+            // console.log(respuesta)
+            res.json({
+               ok: true,
+               resp: respuesta
+           })
+        } else {
+            res.json({
+                ok: false,
+                resp1: 'error ReportAsig'
+            })
+        }
+        
+    } catch (error) {
+        res.json({
+            ok: false,
+            resp: 'error ReportAsig',
+            error
+        })
+    }
+}
+
+const revalidarToken =  async (req,res = response) => {
+
+    const {uid,name} = req;
+
+    const token = await generarJWT(uid,name);
+
+    res.json({
+        ok: true,
+        uid,
+        name,
+        token
+    })
+
+    console.log('Revalidacion de sesion valida', {uid,name})
+
+}
+
+module.exports = {
+    crearUsuario,
+    loginUsuario,
+    crearCorpo,
+    searchCorporaciones,
+    reportPersonas,
+    searchReportePersonas,
+    reportPersonasLocal,
+    updateEvento,
+    razonamientoCorpo,
+    razonamientoCorpoOne,
+    razonCorpo,
+    updateState,
+    reporteAsigna,
+    allReportAsignados,
+    ReportAsignados,
+    revalidarToken
+}
+
+
+// Ver puestos activos :
+ 
+// lsof -i -P | grep -i "listen"
+
+
+// Terminar proceso en puerto : 
+
+// sudo kill -9 NNNN
